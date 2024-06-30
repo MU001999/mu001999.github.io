@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="content-type" content="text/html; charset=utf-8">
+    <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport">
+    <title>Seek Truth</title>
+    <meta charset="utf-8">
+    <link rel="stylesheet"
+        href="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@9.17.1/build/styles/vs.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@9.17.1/build/highlight.min.js"></script>
+    <script>hljs.initHighlightingOnLoad();</script>
+    <script src="https://cdn.jsdelivr.net/npm/clamp-js-main@0.11.6/clamp.min.js"></script>
+    
+<link rel="stylesheet" href="/css/font.css">
+
+    
+<link rel="stylesheet" href="/css/style.css">
+
+<meta name="generator" content="Hexo 5.4.2"><link rel="alternate" href="/atom.xml" title="Seek Truth" type="application/atom+xml">
+</head>
+
+<body>
+    <header class="header">
+    <div class="blog-title">
+        <a href="/" class="logo">Seek Truth</a>
+    </div>
+    <nav class="navbar">
+        <ul class="menu">
+            
+                
+                
+                <li class="menu-item">
+                    <a href="/" class="menu-item-link">Posts</a>
+                </li>
+            
+                
+                
+                <li class="menu-item">
+                    <a href="/atom.xml" class="menu-item-link">RSS</a>
+                </li>
+            
+                
+                
+                <li class="menu-item">
+                    <a target="_blank" rel="noopener" href="https://github.com/MU001999" class="menu-item-link">Github</a>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+    <main class="main">
+        <article class="post">
+    <div class="post-title">
+        <h1 class="title">Contributing to Rust! Improving the dead-code lint of Rust</h1>
+    </div>
+    <div class="post-meta">
+        <span class="post-time">June 30, 2024</span>
+    </div>
+    <div class="post-content">
+        <h1>Improving the dead-code lint of Rust</h1>
+<p>This is a note records my contributions to improve the dead-code lint.</p>
+<p>It’s tiny work ;). And I will introduce the PRs in the order in which they were merged.</p>
+<h2 id="1-118257">1. <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/118257">#118257</a></h2>
+<p>This is the first PR and detects unused traits and trait methods.</p>
+<p>Before this PR, Rustc just mark every impl item live, which lead to mark the corresponding trait and trait method live if there were any impls of the trait.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span>; <span class="hljs-comment">// unused but no warnings</span><br><br><span class="hljs-keyword">trait</span> <span class="hljs-title class_">Tr</span> &#123; <span class="hljs-keyword">fn</span> <span class="hljs-title function_">foo</span>(&amp;<span class="hljs-keyword">self</span>) &#123;&#125; &#125; <span class="hljs-comment">// unused but no warnings</span><br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Tr</span> <span class="hljs-keyword">for</span> <span class="hljs-title class_">T</span> &#123;&#125;<br></code></pre></td></tr></table></figure>
+<p>The thought in this PR is that marking impl terms live only if the corresponding trait methods were used.</p>
+<p>It would be also used if it’s public.</p>
+<p>To keep things simple, this PR only cares about assoc fns and still mark assoc consts and tys live always.</p>
+<h2 id="2-121752">2. <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/121752">#121752</a></h2>
+<p>This PR detects unused adts although they impl public traits.</p>
+<p><a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/118257">#118257</a> works well with unused private traits, but what if we have some unused adts but impl public external traits?</p>
+<p>Public trait methods will be marked live, which leads to mark the impl items and the self type live.</p>
+<p>This will suppress linting these unused adts.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span>; <span class="hljs-comment">// unused but no warnings</span><br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Clone</span> <span class="hljs-keyword">for</span> <span class="hljs-title class_">T</span> &#123;<br>    <span class="hljs-keyword">fn</span> <span class="hljs-title function_">clone</span>(&amp;<span class="hljs-keyword">self</span>) &#123; T &#125; <span class="hljs-comment">// this is public and will lead to mark T live</span><br>&#125;<br></code></pre></td></tr></table></figure>
+<p>The idea in this PR is that we can push impl items into a seperate list firstly and check them later after checking anything else. Then we can mark the impl item live if the trait method and self type are both live. And repeat this until no more impl items being marked live.</p>
+<p>But there is still a problem.</p>
+<p>For example, if we the adt is constructed inside the impl item and the trait is public and external.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span>;<br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Default</span> <span class="hljs-keyword">for</span> <span class="hljs-title class_">T</span> &#123;<br>    <span class="hljs-keyword">fn</span> <span class="hljs-title function_">default</span>() <span class="hljs-punctuation">-&gt;</span> <span class="hljs-keyword">Self</span> &#123;<br>        T<br>    &#125;<br>&#125;<br></code></pre></td></tr></table></figure>
+<p>In such cases, the adt isn’t constrcuted elsewhere, so the adt won’t be marked live correctly although the trait item is used in current crate because we can’t visit external trait items and then visit the corresponding impl item and then mark <code>T</code> live.</p>
+<blockquote>
+<p>In fact, it’s not true. But in this PR, it’s what I thought.<br>
+And we can also check impl items which don’t have receivers later.</p>
+</blockquote>
+<p>The solution is that we can only delay checking impl items which don’t have receivers, this is based on the assumption that we must have the receiver firstly before calling a method on it, but the impl item may construct the Self if it doesn’t have a receiver.</p>
+<p>E.g., we can check <code>Tr::bar(&amp;self)</code> later but still add <code>Tr::foo()</code> into the worklist directly as before while <code>Tr</code> is public.</p>
+<h2 id="3-122382">3. <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/122382">#122382</a></h2>
+<p>This PR extends rules in <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/121752">#121752</a> to unused adts impl private traits.</p>
+<p>After <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/121752">#121752</a>, we still have the problem that the unused adts cannot be linted if they impl private traits whose trait methods are used.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T1</span>; <span class="hljs-comment">// unused but no warnings</span><br><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T2</span>;<br><br><span class="hljs-keyword">trait</span> <span class="hljs-title class_">Tr</span> &#123; <span class="hljs-keyword">fn</span> <span class="hljs-title function_">foo</span>(&amp;<span class="hljs-keyword">self</span>) &#123;&#125; &#125;<br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Tr</span> <span class="hljs-keyword">for</span> <span class="hljs-title class_">T1</span> &#123;&#125;<br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Tr</span> <span class="hljs-keyword">for</span> <span class="hljs-title class_">T2</span> &#123;&#125;<br><br><span class="hljs-keyword">fn</span> <span class="hljs-title function_">main</span>() &#123;<br>    T2.<span class="hljs-title function_ invoke__">foo</span>();<br>&#125;<br></code></pre></td></tr></table></figure>
+<p>Considering the rules in <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/121752">#121752</a>, it makes marking impl items live based on two conditions, one is the trait item is used and the another one is the adt is used, and this is what we need to solve such problems.</p>
+<p>So the solution is just extending the rules in <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/121752">#121752</a>.</p>
+<p>And the difference is that we can check any private trait items later, because private traits are local, and we can check the trait item and then check the impl item which construct the adt inside if the method is used.</p>
+<h2 id="4-125572">4. <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/125572">#125572</a></h2>
+<p>This PR extends rules to public structs but have private fields, and unused private assoc consts in traits.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">pub</span> <span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span>(<span class="hljs-type">i32</span>); <span class="hljs-comment">// unused but no warnings</span><br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Clone</span> <span class="hljs-keyword">for</span> <span class="hljs-title class_">T</span> &#123;<br>    <span class="hljs-keyword">fn</span> <span class="hljs-title function_">clone</span>(&amp;<span class="hljs-keyword">self</span>) <span class="hljs-punctuation">-&gt;</span> <span class="hljs-keyword">Self</span> &#123;<br>        <span class="hljs-title function_ invoke__">T</span>(<span class="hljs-keyword">self</span>.<span class="hljs-number">0</span>)<br>    &#125;<br>&#125;<br></code></pre></td></tr></table></figure>
+<p>This works because we can only construct it safely in current crate like private adts.</p>
+<p>But there’s some controversy about this, see more in <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/issues/126169">#126169</a>. This PR will also lint pub adts which have attributes <code>repr(c)</code> but provide no pub constructors, and such usages often appear in FFI crates.</p>
+<p>IMO, there are two accepted ways to solve this:</p>
+<ol>
+<li>Just adding <code>#[allow(dead_code)]</code> on it</li>
+<li>Skip such adts like what <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/127104">#127104</a> does, thanks to @Soveu who mentioned this in the <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/126456#discussion_r1659350468">comment</a></li>
+</ol>
+<h2 id="5-126276">5. <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/126276">#126276</a></h2>
+<p>This PR extends rules to pub assoc constants in traits.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span>; <span class="hljs-comment">// unused but no warnings</span><br><br><span class="hljs-keyword">pub</span> <span class="hljs-keyword">trait</span> <span class="hljs-title class_">Tr</span> &#123;<br>    <span class="hljs-keyword">const</span> UNUSED: <span class="hljs-type">i32</span>;<br>&#125;<br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Tr</span> <span class="hljs-keyword">for</span> <span class="hljs-title class_">T</span> &#123;<br>    <span class="hljs-keyword">const</span> UNUSED: <span class="hljs-type">i32</span> = <span class="hljs-number">0</span>;<br>&#125;<br></code></pre></td></tr></table></figure>
+<p>Just like assoc fns with receivers in traits, we can mark the pub assoc constant live only if the trait item is used and the self type is used, which helps linting unused adts which impl traits have assoc constants.</p>
+<p>But I think maybe they should be like assoc tys, there is an opened issue about assoc constants, see <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/issues/126729">#126729</a>.</p>
+<h2 id="6-126302">6. <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/126302">#126302</a></h2>
+<p>This PR detects unused adts derived <code>Default</code>.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-meta">#[derive(Default)]</span><br><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span>; <span class="hljs-comment">// unused but no warnings</span><br></code></pre></td></tr></table></figure>
+<p>This PR adds attr <code>#[rustc_trivial_field_reads]</code> on <code>Default</code>, so that we can skip the derived impls in dead code analysis.</p>
+<p>This only works for private structs, although <code>Default::default</code> has no receivers. Because if we’d like to call it, we have to use the <code>T</code> firstly.</p>
+<p>But for pub adts, users can call the method in external crates, so we cannot skip checking this impl item. For private enums, we can know the enum type is used, but we don’t know which variant is used finally, so that we also cannot skip this impl item.</p>
+<blockquote>
+<p>If you compare this to <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/121752">#121752</a>, you will find they are contradictory, lol. In fact, there is no need to deal with <code>Default</code> separately. And what we need is adding impl items into the worklist directly only if it and the self ty are both public.</p>
+</blockquote>
+<h2 id="7-126618">7. <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/126618">#126618</a></h2>
+<p>This PR detects unused adts impl unused traits but have assoc tys.</p>
+<p>Before this PR, assoc tys are marked live always, this will suppress many lints.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span>; <span class="hljs-comment">// unused but no warnings</span><br><br><span class="hljs-keyword">trait</span> <span class="hljs-title class_">Tr</span> &#123;<br>    <span class="hljs-keyword">type</span> <span class="hljs-title class_">X</span>;<br>&#125;<br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Tr</span> <span class="hljs-keyword">for</span> <span class="hljs-title class_">T</span> &#123;<br>    <span class="hljs-keyword">type</span> <span class="hljs-title class_">X</span> = <span class="hljs-keyword">Self</span>;<br>&#125;<br></code></pre></td></tr></table></figure>
+<p>This PR change it by marking assoc tys live if the trait is used.</p>
+<p>It’s simple but works for the above case.</p>
+<p>But I think this can be improved, considering the following case:</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">trait</span> <span class="hljs-title class_">Tr</span> &#123;<br>    <span class="hljs-keyword">type</span> <span class="hljs-title class_">X</span>;<br>&#125;<br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Tr</span> <span class="hljs-title function_ invoke__">for</span> () &#123;<br>    <span class="hljs-keyword">type</span> <span class="hljs-title class_">X</span> = <span class="hljs-type">i32</span>;<br>&#125;<br><br><span class="hljs-keyword">fn</span> <span class="hljs-title function_">foo</span>() <span class="hljs-punctuation">-&gt;</span> <span class="hljs-keyword">impl</span> <span class="hljs-title class_">Tr</span>&lt;X = <span class="hljs-type">i32</span>&gt; &#123;&#125;<br><span class="hljs-comment">// what if `fn foo() -&gt; impl Tr &#123;&#125;`</span><br><br><span class="hljs-keyword">fn</span> <span class="hljs-title function_">main</span>() &#123;<br>    <span class="hljs-title function_ invoke__">foo</span>();<br>&#125;<br></code></pre></td></tr></table></figure>
+<p>Currently, <code>X</code> is only used but cannot be marked used. Maybe I will try it again if I can find a way to populate the liveness correctly.</p>
+<h2 id="8-127017">8. <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/127017">#127017</a></h2>
+<p>This is unmerged for now.</p>
+<p>This PR detects unused adts which have impls for types refer to them.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span>; <span class="hljs-comment">// unused but no warnings</span><br><br><span class="hljs-keyword">trait</span> <span class="hljs-title class_">Tr</span> &#123;<br>    <span class="hljs-keyword">fn</span> <span class="hljs-title function_">foo</span>(&amp;<span class="hljs-keyword">self</span>) &#123;&#125;<br>&#125;<br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Tr</span> <span class="hljs-keyword">for</span> &amp;T &#123;&#125;<br></code></pre></td></tr></table></figure>
+<p>After this PR, such impls will be checked as same as <code>impl Tr for T &#123; .. &#125;</code>. Because the rules in <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/121752">#121752</a> and <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/122382">#122382</a> also work for these impls whose self types refer to the local adt.</p>
+<h2 id="9-127107">9. <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/127107">#127107</a></h2>
+<p>This is unmerged for now.</p>
+<p>This is a fix for <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/121752">#121752</a>, <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/126302">#126302</a> and <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/issues/120770">#120770</a>.</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><code class="hljs rust"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span>(<span class="hljs-type">i32</span>); <span class="hljs-comment">// unused but no warnings</span><br><br><span class="hljs-keyword">impl</span> <span class="hljs-title class_">Default</span> <span class="hljs-keyword">for</span> <span class="hljs-title class_">T</span> &#123;<br>    <span class="hljs-keyword">fn</span> <span class="hljs-title function_">default</span>() <span class="hljs-punctuation">-&gt;</span> <span class="hljs-keyword">Self</span> &#123; T &#125;<br>&#125;<br><br><span class="hljs-keyword">fn</span> <span class="hljs-title function_">main</span>() &#123;<br>    <span class="hljs-comment">// in fact, the pattern `T(_x)` implies value construction of `T`</span><br>    <span class="hljs-keyword">let</span> <span class="hljs-variable">T</span>(_x) = <span class="hljs-built_in">Default</span>::<span class="hljs-title function_ invoke__">default</span>();<br>&#125;<br></code></pre></td></tr></table></figure>
+<p>This contains three parts:</p>
+<ol>
+<li>Adding impl items into the worklist directly only if it and the self ty are both public</li>
+<li>Marking the adt live if it appears in pattern, like generic argument, this implies the adt is used/constructed. This also fixes <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/issues/120770">#120770</a></li>
+<li>Reverting <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/126302">#126302</a>, we can lint unused adts derived <code>Default</code> correctly based on the above two</li>
+</ol>
+<blockquote>
+<p>When implementing <a target="_blank" rel="noopener" href="https://github.com/rust-lang/rust/pull/121752">#121752</a>, I didn’t check carefully why the tests failed. I just thought that’s because we can call trait methods but not know the determined type, like in a generic function. So that we can’t mark the type live. But in fact, type will be specified at least once before calling such a generic function. The type will be specified by a generic argument, a type annotation or a pattern. The generic argument and type annotation both will mark the type live, but pattern won’t, this is the real reason. So that we don’t need to add impl items into the worklist if it’s public but the self type is private. Cause we will mark the type live before using the trait item of the impl item.</p>
+</blockquote>
+<h2 id="Conclusion">Conclusion</h2>
+<p>Finally, thank you whether you read this note or not!</p>
+<!-- Links -->
+
+    </div>
+</article>
+
+    </main>
+    <div class="footer">Copyright &copy;&nbsp;<a href="/">Mu001999</a>&nbsp;|&nbsp;<a href="http://www.miibeian.gov.cn/" target="_blank">京ICP备17013700号</a></div>
+
+</body>
+</html>
